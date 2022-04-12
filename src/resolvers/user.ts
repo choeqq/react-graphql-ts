@@ -23,7 +23,6 @@ class UsernamePasswordInput {
 class FieldError {
   @Field()
   field: string;
-
   @Field()
   message: string;
 }
@@ -39,27 +38,63 @@ class UserResponse {
 
 @Resolver()
 export class UserResolver {
-  @Mutation(() => User)
+  @Mutation(() => UserResponse)
   async register(
     @Arg("options") options: UsernamePasswordInput,
     @Ctx() { em }: MyContext
-  ) {
+  ): Promise<UserResponse> {
+    if (options.username.length <= 2) {
+      return {
+        errors: [
+          {
+            field: "username",
+            message: "length must be greater than 2",
+          },
+        ],
+      };
+    }
+
+    if (options.password.length <= 2) {
+      return {
+        errors: [
+          {
+            field: "password",
+            message: "length must be greater than 2",
+          },
+        ],
+      };
+    }
+
     const hashedPassword = await argon2.hash(options.password);
     const user = em.create(User, {
       username: options.username,
       password: hashedPassword,
     });
-    await em.persistAndFlush(user);
-    return user;
+    try {
+      await em.persistAndFlush(user);
+    } catch (err) {
+      //|| err.detail.includes("already exists")) {
+      // duplicate username error
+      if (err.code === "23505") {
+        return {
+          errors: [
+            {
+              field: "username",
+              message: "username already taken",
+            },
+          ],
+        };
+      }
+    }
+    return { user };
   }
+
   @Mutation(() => UserResponse)
   async login(
     @Arg("options") options: UsernamePasswordInput,
     @Ctx() { em }: MyContext
   ): Promise<UserResponse> {
-    const user = em.findOneOrFail(User, {
-      username: options.username,
-    });
+    const user = await em.findOne(User, { username: options.username });
     if (!user) {
       return {
         errors: [
@@ -70,7 +105,7 @@ export class UserResolver {
         ],
       };
     }
-    const valid = await argon2.verify((await user).password, options.password);
+    const valid = await argon2.verify(user.password, options.password);
     if (!valid) {
       return {
         errors: [
